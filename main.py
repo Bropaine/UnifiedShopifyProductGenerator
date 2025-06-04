@@ -108,22 +108,39 @@ def get_shopify_images():
 # --- 2. Parse image filenames and create product objects ---
 def parse_image_filename(filename):
     """
-    Expects: category_subcat1_subcat2_Title_Price.png
-    Example: video-games_atari_consoles_Atari-2600_89.99.png
+    Expects: category[_subcategory1...][_subcategoryN]_Title_Price[_extra-notes].ext
+    Price can be at the end or followed by extra notes.
+    Example: video-games_atari_consoles_Atari-2600_89.99_sealed-in-box.png
+             video-games_atari_consoles_Atari-2600_89.99.png
     """
     name = os.path.splitext(os.path.basename(filename))[0]
     parts = name.split('_')
     if len(parts) < 4:
         raise ValueError(f"Filename too short: {filename}")
-    try:
-        price = float(parts[-1])
-    except Exception:
-        raise ValueError(f"Price part must be a float, got: {parts[-1]} in {filename}")
-    title_raw = parts[-2]
+
+    # Find price (first valid float from the end, and its index)
+    price = None
+    price_idx = None
+    for i in range(len(parts) - 1, 0, -1):
+        try:
+            price = float(parts[i])
+            price_idx = i
+            break
+        except ValueError:
+            continue
+
+    if price is None or price_idx is None:
+        raise ValueError(f"No valid price found in {filename}")
+
+    # Everything after price is extra notes (if any)
+    extra_notes = ""
+    if price_idx < len(parts) - 1:
+        extra_notes = "_".join(parts[price_idx + 1:]).replace('-', ' ')
+
+    title_raw = parts[price_idx - 1]
     title = title_raw.replace('-', ' ').title()
-    categories = parts[:-2]
-    base_handle = "-".join(parts[:-1]).lower()
-    # Salt: 6-char hash from filename for uniqueness
+    categories = parts[:price_idx - 1]
+    base_handle = "-".join(parts[:price_idx]).lower()
     salt = hashlib.sha1(filename.encode()).hexdigest()[:6]
     handle = f"{base_handle}-{salt}"
     tag_labels = ["category", "subcategory1", "subcategory2", "subcategory3", "subcategory4"]
@@ -137,18 +154,27 @@ def parse_image_filename(filename):
         "price": price,
         "categories": categories,
         "tags": tags,
+        "extra_notes": extra_notes
     }
 
-
 # --- 3. AI-powered product description ---
-def get_ai_description(title, tags, image_url):
+def get_ai_description(title, tags, extra_notes=""):
     prompt = (
-        f"You are a master copywriter for a hip and upcoming retro reseller brand. "
-        f"Write a 30-word product description for an online retro shop.\n"
-        f"Product name: {title}\nTags: {', '.join(tags)}\n"
-        f"Be accurate and appealing, avoid repeating the tags. Fitting a retro brand. "
-        f"Here is the main image: {image_url}"
+        "You are a clever, creative copywriter for a cool retro games and collectibles shop. "
+        "Write a unique, punchy product description for a web store listing. "
+        "Each description should be original (never copy-pasted), natural, and fit the brand’s fun, nostalgic voice.\n"
+        f"Product title: {title}\n"
+        f"Tags: {', '.join(tags)}\n"
+        "Guidelines:\n"
+        "- Limit to 30–40 words—concise and scannable.\n"
+        "- Do NOT repeat the title or tags verbatim.\n"
+        "- Do NOT use generic phrases like 'must-have', 'timeless', 'classic', 'iconic'—be specific and vivid.\n"
+        "- If the product is vintage, limited, or rare, highlight this.\n"
+        "- Use active, descriptive language that tells the shopper what makes this item special or fun.\n"
+        "- If you see details about condition, era, or features (from title or tags), mention them naturally.\n"
     )
+    if extra_notes:
+        prompt += f"\nExtra notes for the copywriter: {extra_notes}\n"
     response = client.chat.completions.create(
         model="gpt-4o",
         messages=[{"role": "user", "content": prompt}],
@@ -156,6 +182,7 @@ def get_ai_description(title, tags, image_url):
         temperature=0.7
     )
     return response.choices[0].message.content.strip()
+
 
 
 # --- 4. Group images by handle, build product dicts for CSV and JS ---
@@ -172,7 +199,8 @@ def group_images_by_handle(images):
         title = parsed["title"]
         price = parsed["price"]
         tags = parsed["tags"]
-        desc = get_ai_description(title, tags, img["url"])
+        extra_notes = parsed.get("extra_notes", "")
+        desc = get_ai_description(title, tags, extra_notes)
         # JS Product object (for your site)
         product = {
             "id": handle,

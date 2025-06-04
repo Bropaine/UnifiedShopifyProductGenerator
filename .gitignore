@@ -1,0 +1,7 @@
+# .gitignore
+.env
+__pycache__/
+*.pyc
+shopify_upload.csv
+products.js
+.idea/

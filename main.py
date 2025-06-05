@@ -1,57 +1,48 @@
 """
-Unified Shopify Product & Frontend Data Generator
--------------------------------------------------
-This script is the first step in a human-in-the-loop, two-stage product workflow.
+Unified Shopify Product & Frontend Data Generator - GUI Edition
+---------------------------------------------------------------
+This GUI automates product data generation for Shopify and a custom static site using
+human-curated image filenames (uploaded to Shopify Files) as the *source of truth*.
 
-**Purpose:** - To automate product data generation for Shopify and a custom static site using human-curated image
-filenames as the *source of truth*. - For each product image file (named with a specific, human-managed convention),
-this script: - Parses the filename for category, title, and price. - Generates unique, salted product handles to
-ensure Shopify compatibility. - Uses OpenAI to generate human-quality product descriptions. - Outputs: - A Shopify
-product CSV for *manual review and upload* by the operator (the human). - A JavaScript/JSON product data file for the
-static frontend.
+**How to use:**
+1. Upload your product images to Shopify Files (Admin → Content → Files).
+   - Filenames must use the correct convention!
+2. Fill in your Shopify credentials below (these will be prefilled from .env if present).
+3. Click "Run" to fetch all product images, generate descriptions, and export
+   BOTH a Shopify product CSV and a JavaScript products.js file for your site.
+4. Upload the CSV manually to Shopify (Admin → Products → Import).
+5. The products.js file can be used by your static site frontend.
 
-**Workflow:** 1. The human operator uploads new product images (with strict naming) to Shopify. 2. This script is run
-to generate both the CSV and the `products.js` file. 3. The human reviews and uploads the CSV via Shopify Admin (
-triggering product creation). 4. Once Shopify has created the products, the operator runs `backfill_variant_ids.py`
-to fetch and populate the Shopify variant IDs in the static site data.
-
-**Key Principle:**
-- Humans make the key decisions about product content, inventory, and timing.
-- The pipeline automates tedious data prep, but keeps the operator in control and in the loop.
-
-See `backfill_variant_ids.py` for stage two of the workflow.
 """
 
-import csv
-import hashlib
-import json
+import tkinter as tk
+from tkinter import ttk, messagebox
 import os
-import openai
-import requests
 from dotenv import load_dotenv
+import threading
 
-# --- Load env vars ---
+# ---- Import your data generation logic ----
+import hashlib
+import csv
+import json
+import requests
+import openai
+
 load_dotenv()
-SHOPIFY_SHOP = os.getenv("SHOPIFY_SHOP")
-SHOPIFY_TOKEN = os.getenv("SHOPIFY_TOKEN")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-assert all([SHOPIFY_SHOP, SHOPIFY_TOKEN, OPENAI_API_KEY]), "Missing one or more required .env values!"
-
-client = openai.OpenAI(api_key=OPENAI_API_KEY)
+DEFAULT_SHOP = os.getenv("SHOPIFY_SHOP") or ""
+DEFAULT_TOKEN = os.getenv("SHOPIFY_TOKEN") or ""
+DEFAULT_OPENAI = os.getenv("OPENAI_API_KEY") or ""
 
 CSV_FIELDNAMES = [
     "Handle", "Title", "Body (HTML)", "Vendor", "Tags", "Published",
     "Option1 Name", "Option1 Value", "Variant Inventory Qty", "Variant Price", "Image Src"
 ]
 
-
-# --- 1. Get all image URLs from Shopify Files API ---
-def get_shopify_images():
-    """Fetches all image file URLs from Shopify Files API using GraphQL."""
-    url = f"https://{SHOPIFY_SHOP}/admin/api/2025-04/graphql.json"
+def get_shopify_images(shop, token):
+    url = f"https://{shop}/admin/api/2025-04/graphql.json"
     headers = {
         "Content-Type": "application/json",
-        "X-Shopify-Access-Token": SHOPIFY_TOKEN,
+        "X-Shopify-Access-Token": token,
     }
     has_next_page = True
     after = None
@@ -83,15 +74,9 @@ def get_shopify_images():
         response = requests.post(
             url, headers=headers, json={"query": query, "variables": variables}
         )
-        try:
-            result = response.json()
-        except Exception as ex:
-            print("Failed to parse JSON response:", response.text)
-            raise
-        # Error handling
+        result = response.json()
         if "errors" in result:
-            print("Shopify API returned error(s):", result["errors"])
-            raise Exception("Shopify GraphQL query failed.")
+            raise Exception("Shopify GraphQL query failed: %s" % result["errors"])
         files = result["data"]["files"]["edges"]
         for f in files:
             node = f["node"]
@@ -104,21 +89,11 @@ def get_shopify_images():
         after = result["data"]["files"]["pageInfo"]["endCursor"]
     return images
 
-
-# --- 2. Parse image filenames and create product objects ---
 def parse_image_filename(filename):
-    """
-    Expects: category[_subcategory1...][_subcategoryN]_Title_Price[_extra-notes].ext
-    Price can be at the end or followed by extra notes.
-    Example: video-games_atari_consoles_Atari-2600_89.99_sealed-in-box.png
-             video-games_atari_consoles_Atari-2600_89.99.png
-    """
     name = os.path.splitext(os.path.basename(filename))[0]
     parts = name.split('_')
     if len(parts) < 4:
         raise ValueError(f"Filename too short: {filename}")
-
-    # Find price (first valid float from the end, and its index)
     price = None
     price_idx = None
     for i in range(len(parts) - 1, 0, -1):
@@ -128,15 +103,11 @@ def parse_image_filename(filename):
             break
         except ValueError:
             continue
-
     if price is None or price_idx is None:
         raise ValueError(f"No valid price found in {filename}")
-
-    # Everything after price is extra notes (if any)
     extra_notes = ""
     if price_idx < len(parts) - 1:
         extra_notes = "_".join(parts[price_idx + 1:]).replace('-', ' ')
-
     title_raw = parts[price_idx - 1]
     title = title_raw.replace('-', ' ').title()
     categories = parts[:price_idx - 1]
@@ -157,8 +128,8 @@ def parse_image_filename(filename):
         "extra_notes": extra_notes
     }
 
-# --- 3. AI-powered product description ---
-def get_ai_description(title, tags, extra_notes=""):
+def get_ai_description(openai_key, title, tags, extra_notes=""):
+    client = openai.OpenAI(api_key=openai_key)
     prompt = (
         "You are a clever, creative copywriter for a cool retro games and collectibles shop. "
         "Write a unique, punchy product description for a web store listing. "
@@ -183,10 +154,7 @@ def get_ai_description(title, tags, extra_notes=""):
     )
     return response.choices[0].message.content.strip()
 
-
-
-# --- 4. Group images by handle, build product dicts for CSV and JS ---
-def group_images_by_handle(images):
+def group_images_by_handle(images, openai_key):
     products = []
     for img in images:
         filename = img["url"].split("/")[-1]
@@ -200,8 +168,7 @@ def group_images_by_handle(images):
         price = parsed["price"]
         tags = parsed["tags"]
         extra_notes = parsed.get("extra_notes", "")
-        desc = get_ai_description(title, tags, extra_notes)
-        # JS Product object (for your site)
+        desc = get_ai_description(openai_key, title, tags, extra_notes)
         product = {
             "id": handle,
             "name": title,
@@ -220,7 +187,6 @@ def group_images_by_handle(images):
             "quantity": 1,
             "featured": False
         }
-        # Shopify CSV row
         csv_row = {
             "Handle": handle,
             "Title": title,
@@ -237,30 +203,148 @@ def group_images_by_handle(images):
         products.append({"csv_row": csv_row, "js_product": product})
     return products
 
-
-# --- 5. Write Shopify CSV ---
 def write_csv(products, outfile):
     with open(outfile, "w", newline='', encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=CSV_FIELDNAMES)
         writer.writeheader()
         for prod in products:
             writer.writerow(prod["csv_row"])
-    print(f"Wrote {len(products)} products to {outfile}")
 
-
-# --- 6. Write products.js for your frontend ---
 def write_products_js(products, outfile):
     product_list = [prod["js_product"] for prod in products]
     with open(outfile, "w", encoding="utf-8") as f:
         f.write("window.products = ")
         json.dump(product_list, f, ensure_ascii=False, indent=2)
         f.write(";\n")
-    print(f"Wrote {len(product_list)} products to {outfile}")
 
+# ----------- GUI PART -----------
 
-# --- MAIN ---
+import tkinter as tk
+from tkinter import ttk, messagebox, scrolledtext
+import os
+import sys
+import threading
+import subprocess
+
+# ... [rest of your import and business logic code above] ...
+
+class ProductGenGUI(tk.Tk):
+    def __init__(self):
+        super().__init__()
+        self.title("Shopify/Static Site Product Data Generator")
+        self.geometry("640x420")
+        instructions = (
+            "How to use:\n"
+            "1. Upload product images to Shopify Admin → Content → Files. Filenames MUST follow your naming rules.\n"
+            "2. Enter your Shopify Shop, Token, and OpenAI API Key below. These are prefilled from .env if present.\n"
+            "3. Click 'Run' to fetch images, generate data, and export shopify_upload.csv & products.js."
+        )
+        tk.Label(self, text=instructions, justify="left", wraplength=600).pack(pady=6)
+
+        frm = tk.Frame(self)
+        frm.pack(pady=10, fill='x')
+
+        tk.Label(frm, text="Shopify Shop (e.g. yourshop.myshopify.com):").grid(row=0, column=0, sticky='w')
+        self.shop_entry = tk.Entry(frm, width=48)
+        self.shop_entry.grid(row=0, column=1)
+        self.shop_entry.insert(0, DEFAULT_SHOP)
+
+        tk.Label(frm, text="Shopify Token:").grid(row=1, column=0, sticky='w')
+        self.token_entry = tk.Entry(frm, width=48, show="*")
+        self.token_entry.grid(row=1, column=1)
+        self.token_entry.insert(0, DEFAULT_TOKEN)
+
+        tk.Label(frm, text="OpenAI API Key:").grid(row=2, column=0, sticky='w')
+        self.openai_entry = tk.Entry(frm, width=48, show="*")
+        self.openai_entry.grid(row=2, column=1)
+        self.openai_entry.insert(0, DEFAULT_OPENAI)
+
+        self.run_btn = tk.Button(self, text="Run", command=self.run_generator)
+        self.run_btn.pack(pady=18)
+
+        # Use a scrolled text for multi-line status updates
+        self.log = scrolledtext.ScrolledText(self, height=10, width=80, state="disabled", wrap="word", font=("Consolas", 10))
+        self.log.pack(pady=4, fill="both", expand=True)
+
+        # Placeholders for hyperlink labels
+        self.link_labels = []
+
+    def log_msg(self, msg, color="black"):
+        self.log.config(state="normal")
+        self.log.insert("end", msg + "\n", color)
+        self.log.tag_configure("blue", foreground="#176ad4")
+        self.log.tag_configure("green", foreground="#298e46")
+        self.log.tag_configure("red", foreground="#b03030")
+        self.log.tag_configure("black", foreground="#222")
+        self.log.see("end")
+        self.log.config(state="disabled")
+
+    def run_generator(self):
+        shop = self.shop_entry.get().strip()
+        token = self.token_entry.get().strip()
+        openai_key = self.openai_entry.get().strip()
+        if not (shop and token and openai_key):
+            messagebox.showerror("Error", "Please fill all credential fields.")
+            return
+        self.log.config(state="normal")
+        self.log.delete("1.0", "end")
+        self.log.config(state="disabled")
+        self.log_msg("Starting product data generation...\n", "blue")
+        self.run_btn.config(state="disabled")
+        for lbl in self.link_labels:
+            lbl.destroy()
+        self.link_labels.clear()
+        threading.Thread(target=self._generate, args=(shop, token, openai_key), daemon=True).start()
+
+    def show_file_link(self, path, description):
+        def callback(event=None):
+            abs_path = os.path.abspath(path)
+            folder = os.path.dirname(abs_path)
+            try:
+                if sys.platform.startswith("win"):
+                    subprocess.Popen(['explorer', '/select,', abs_path])
+                elif sys.platform == "darwin":
+                    subprocess.Popen(['open', '-R', abs_path])
+                else:
+                    subprocess.Popen(['xdg-open', folder])
+            except Exception as ex:
+                messagebox.showerror("Error", f"Could not open file location:\n{ex}")
+
+        link = tk.Label(self, text=f"Open {description}: {os.path.basename(path)}", fg="#176ad4", cursor="hand2", wraplength=570)
+        link.pack()
+        link.bind("<Button-1>", callback)
+        self.link_labels.append(link)
+
+    def _generate(self, shop, token, openai_key):
+        try:
+            self.log_msg("Fetching images from Shopify...", "blue")
+            images = get_shopify_images(shop, token)
+            self.log_msg(f"  ✓ {len(images)} images found.", "green")
+            self.log_msg("Parsing image filenames...", "blue")
+            # (Could add per-file logs here if desired)
+            self.log_msg("Generating product descriptions with OpenAI...", "blue")
+            products = group_images_by_handle(images, openai_key)
+            self.log_msg(f"  ✓ {len(products)} products generated.", "green")
+            out_csv = "shopify_upload.csv"
+            out_js = "products.js"
+            self.log_msg("Writing Shopify CSV...", "blue")
+            write_csv(products, out_csv)
+            self.log_msg("  ✓ shopify_upload.csv written.", "green")
+            self.log_msg("Writing products.js...", "blue")
+            write_products_js(products, out_js)
+            self.log_msg("  ✓ products.js written.", "green")
+            self.log_msg("\nAll done! See files below.", "green")
+            self.show_file_link(out_csv, "Shopify CSV")
+            self.show_file_link(out_js, "products.js (frontend)")
+            self.log_msg("Run Backfill Variant Ids on products.js After Uploading CSV to Shopify", "blue")
+            self.log_msg("Review and import CSV in Shopify Admin > Products > Import.", "blue")
+        except Exception as ex:
+            self.log_msg(f"Error: {ex}", "red")
+            messagebox.showerror("Failed", str(ex))
+        finally:
+            self.run_btn.config(state="normal")
+
+# --- rest of your business logic as before ---
+
 if __name__ == "__main__":
-    all_images = get_shopify_images()
-    products = group_images_by_handle(all_images)
-    write_csv(products, "shopify_upload.csv")
-    write_products_js(products, "products.js")
+    ProductGenGUI().mainloop()

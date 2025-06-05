@@ -21,10 +21,24 @@ This utility parses your site's nav.html and extracts the category path tuples r
 
 See also: menu_editor.py, validate_filenames.py, and your main product pipeline.
 
+
+
+Category Path Extractor for Static Site Navigation (GUI)
+--------------------------------------------------------
+Select your nav.html, extract category paths, and update the canonical Python list used by your site tools.
+
+- Click "Browse" to select nav.html.
+- Click "Extract" to generate Valid_Category_Paths/valid_category_paths.py.
+- Status messages and output appear below.
+
+See also: menu_editor.py, validate_filenames.py
 """
 
+import tkinter as tk
+from tkinter import filedialog, messagebox, scrolledtext
 from bs4 import BeautifulSoup
 import os
+
 
 def extract_paths_from_nav(nav_file):
     with open(nav_file, encoding='utf-8') as f:
@@ -53,26 +67,71 @@ def extract_paths_from_nav(nav_file):
 
     return paths
 
+
+class CategoryPathExtractorApp(tk.Tk):
+    def __init__(self):
+        super().__init__()
+        self.title("Category Path Extractor (nav.html → valid_category_paths.py)")
+        self.geometry("600x390")
+        self.nav_file = tk.StringVar()
+
+        tk.Label(self, text="Step 1: Browse for your site's nav.html file").pack(pady=6)
+        frm = tk.Frame(self)
+        frm.pack()
+        tk.Entry(frm, textvariable=self.nav_file, width=60, state="readonly").pack(side="left", padx=2)
+        tk.Button(frm, text="Browse", command=self.browse_nav).pack(side="left")
+
+        tk.Label(self, text="Step 2: Click 'Extract' to parse and update category path list").pack(pady=10)
+        tk.Button(self, text="Extract Category Paths", command=self.extract_and_write).pack()
+
+        self.status = scrolledtext.ScrolledText(self, height=10, wrap="word", state="disabled", font=("Consolas", 10))
+        self.status.pack(fill="both", expand=True, pady=8, padx=8)
+
+    def browse_nav(self):
+        filename = filedialog.askopenfilename(
+            title="Select nav.html",
+            filetypes=[("HTML files", "*.html"), ("All files", "*.*")]
+        )
+        if filename:
+            self.nav_file.set(filename)
+
+    def extract_and_write(self):
+        nav_path = self.nav_file.get()
+        if not nav_path or not os.path.isfile(nav_path):
+            messagebox.showerror("No file", "Please select a valid nav.html file.")
+            return
+
+        out_dir = "Valid_Category_Paths"
+        out_file = os.path.join(out_dir, "valid_category_paths.py")
+
+        all_paths = extract_paths_from_nav(nav_path)
+        # Deduplicate but preserve nav order!
+        seen = set()
+        ordered_paths = []
+        for p in all_paths:
+            if p not in seen:
+                seen.add(p)
+                ordered_paths.append(p)
+
+        os.makedirs(out_dir, exist_ok=True)
+
+        with open(out_file, "w", encoding="utf-8") as f:
+            f.write("VALID_CATEGORY_PATHS = [\n")
+            for path in ordered_paths:
+                f.write(f"    {path},\n")
+            f.write("]\n")
+
+        msg = (
+            f"Wrote {len(ordered_paths)} unique category paths to {out_file}\n"
+            f"Source nav.html: {nav_path}\n"
+            "You can now use menu_editor.py and filename validator with updated category paths."
+        )
+        self.status.config(state="normal")
+        self.status.insert("end", msg + "\n\n")
+        self.status.see("end")
+        self.status.config(state="disabled")
+        messagebox.showinfo("Done", f"Category paths extracted and written to:\n{out_file}")
+
+
 if __name__ == "__main__":
-    nav_html_file = "nav/nav.html"  # Change this if your path differs
-    out_dir = "Valid_Category_Paths"
-    out_file = os.path.join(out_dir, "valid_category_paths.py")
-
-    all_paths = extract_paths_from_nav(nav_html_file)
-    # Deduplicate but preserve nav order!
-    seen = set()
-    ordered_paths = []
-    for p in all_paths:
-        if p not in seen:
-            seen.add(p)
-            ordered_paths.append(p)
-
-    os.makedirs(out_dir, exist_ok=True)
-
-    with open(out_file, "w", encoding="utf-8") as f:
-        f.write("VALID_CATEGORY_PATHS = [\n")
-        for path in ordered_paths:
-            f.write(f"    {path},\n")
-        f.write("]\n")
-
-    print(f"Wrote {len(ordered_paths)} unique category paths to {out_file}")
+    CategoryPathExtractorApp().mainloop()

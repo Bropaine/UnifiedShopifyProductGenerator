@@ -17,20 +17,34 @@ To use:
 3. Run: `python validate_filenames.py path/to/folder`
 
 Human stays in control: **no renaming or moving is performed.**
+
+Shopify/Static Site Filename Validator — GUI Edition
+----------------------------------------------------
+Checks all image filenames in a selected folder for naming convention, valid category paths, duplicates, and more.
+
+Instructions:
+- Click 'Browse' to select the folder with your product images.
+- Click 'Validate' to run checks.
+- Errors, warnings, and a summary will be displayed.
+- "Open Folder" opens the folder in your OS file manager.
+
+Requires: valid_category_paths.py in Valid_Category_Paths/
 """
 
 import os
 import sys
 import hashlib
 import difflib
+import tkinter as tk
+from tkinter import filedialog, messagebox, scrolledtext
+import subprocess
 
 # --- LOAD VALID CATEGORY PATHS ---
 try:
     from Valid_Category_Paths.valid_category_paths import VALID_CATEGORY_PATHS
 except ImportError:
-    print("ERROR: Could not import VALID_CATEGORY_PATHS. "
-          "Make sure a valid_category_paths.py file with a list called VALID_CATEGORY_PATHS exists.")
-    sys.exit(1)
+    VALID_CATEGORY_PATHS = []
+    # The GUI will error if run, but this allows code to load for editing.
 
 ACCEPTED_EXTENSIONS = {".jpg", ".jpeg", ".png"}
 FORBID_CHARS = set(' !"#$%&\'()*,:;<=>?@[\\]^`{|}~')  # Allow hyphen/underscore/dot only
@@ -73,23 +87,20 @@ def parse_image_filename(filename):
     }, None
 
 def find_close_path(cat_tuple):
-    # Find closest valid paths using difflib
-    # Only compare tuples of same length for meaningful suggestions
     matches = difflib.get_close_matches(
         '::'.join(cat_tuple),
         ['::'.join(t) for t in VALID_CATEGORY_PATHS if len(t) == len(cat_tuple)],
         n=2, cutoff=0.7)
     return [tuple(m.split('::')) for m in matches] if matches else []
 
-def main(img_folder):
-    print(f"Validating image filenames in: {img_folder}")
+def validate_folder(img_folder):
+    results = []
     all_files = [
         f for f in os.listdir(img_folder)
         if os.path.splitext(f)[1].lower() in ACCEPTED_EXTENSIONS
     ]
     if not all_files:
-        print("No image files found in the folder!")
-        return
+        return "No image files found in the folder!\n", [], [], 0, 0, 0
 
     errors = []
     warnings = []
@@ -125,26 +136,74 @@ def main(img_folder):
             close = find_close_path(cat_tuple)
             suggestion = f" (Did you mean: {', '.join([' -> '.join(c) for c in close])})" if close else ""
             errors.append((fname, f"Category path {cat_tuple} not found in menu!{suggestion}"))
-
-    # --- REPORT ---
-    print("\n---- VALIDATION REPORT ----")
+    report = ["\n---- VALIDATION REPORT ----"]
     if not errors and not warnings:
-        print("All filenames PASSED validation!\n")
+        report.append("All filenames PASSED validation!\n")
     else:
         for fname, err in errors:
-            print(f"[ERROR]   {fname:40}  {err}")
+            report.append(f"[ERROR]   {fname:40}  {err}")
         for fname, warn in warnings:
-            print(f"[WARNING] {fname:40}  {warn}")
-    print(f"\nSummary: {len(all_files)} files checked | {len(errors)} errors | {len(warnings)} warnings")
+            report.append(f"[WARNING] {fname:40}  {warn}")
+    summary = f"\nSummary: {len(all_files)} files checked | {len(errors)} errors | {len(warnings)} warnings"
+    report.append(summary)
+    return "\n".join(report), errors, warnings, len(all_files), len(errors), len(warnings)
+
+class ValidatorGUI(tk.Tk):
+    def __init__(self):
+        super().__init__()
+        self.title("Shopify/Static Site Filename Validator")
+        self.geometry("780x500")
+        self.folder = tk.StringVar()
+        tk.Label(self, text="Step 1: Browse for your product image folder").pack(pady=5)
+        frm = tk.Frame(self)
+        frm.pack()
+        tk.Entry(frm, textvariable=self.folder, width=60, state="readonly").pack(side="left", padx=2)
+        tk.Button(frm, text="Browse", command=self.browse_folder).pack(side="left")
+        tk.Button(frm, text="Open Folder", command=self.open_folder).pack(side="left", padx=5)
+        tk.Label(self, text="Step 2: Click 'Validate' to check all image filenames").pack(pady=8)
+        tk.Button(self, text="Validate", command=self.run_validation).pack()
+        self.status = scrolledtext.ScrolledText(self, height=20, wrap="word", state="disabled", font=("Consolas", 10))
+        self.status.pack(fill="both", expand=True, pady=10, padx=10)
+
+    def browse_folder(self):
+        folder = filedialog.askdirectory(title="Select folder with images")
+        if folder:
+            self.folder.set(folder)
+
+    def open_folder(self):
+        folder = self.folder.get()
+        if not folder or not os.path.isdir(folder):
+            messagebox.showerror("No folder", "No valid folder selected.")
+            return
+        if sys.platform == "win32":
+            os.startfile(folder)
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", folder])
+        else:
+            subprocess.Popen(["xdg-open", folder])
+
+    def run_validation(self):
+        folder = self.folder.get()
+        if not folder or not os.path.isdir(folder):
+            messagebox.showerror("No folder", "Please select a valid image folder.")
+            return
+        if not VALID_CATEGORY_PATHS:
+            messagebox.showerror(
+                "Missing valid_category_paths.py",
+                "VALID_CATEGORY_PATHS not found. Make sure 'Valid_Category_Paths/valid_category_paths.py' exists."
+            )
+            return
+        report, errors, warnings, total, nerr, nwarn = validate_folder(folder)
+        self.status.config(state="normal")
+        self.status.delete("1.0", "end")
+        self.status.insert("end", report)
+        self.status.see("end")
+        self.status.config(state="disabled")
+        if nerr == 0 and nwarn == 0:
+            messagebox.showinfo("All Clear", "All files passed validation!\nReady to upload.")
+        else:
+            messagebox.showwarning("Validation complete",
+                                   f"{nerr} errors, {nwarn} warnings.\nSee details in the report below.")
 
 if __name__ == "__main__":
-    if len(sys.argv) > 1:
-        img_folder = sys.argv[1]
-    else:
-        # Default to 'images' folder at project root
-        img_folder = os.path.join(os.path.dirname(__file__), "images")
-        print(f"No folder argument provided, defaulting to: {img_folder}")
-    if not os.path.isdir(img_folder):
-        print(f"Image folder not found: {img_folder}")
-        sys.exit(1)
-    main(img_folder)
+    ValidatorGUI().mainloop()

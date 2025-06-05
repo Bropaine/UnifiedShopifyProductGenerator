@@ -1,3 +1,35 @@
+"""
+Menu Hierarchy GUI Editor for Static Site Navigation
+----------------------------------------------------
+
+**Purpose:**
+A visual tool for managing your site's category/menu structure and display aliases, with direct export of both:
+- `nav/nav.html` (used by your static site as the main navigation menu)
+- `Valid_Category_Paths/valid_category_paths.py` (used by your filename validator, pipeline, and other tools)
+
+**How it fits in your workflow:**
+1. Edit categories/aliases/structure visually (add, remove, alias, or reorder).
+2. Export updates both your actual nav menu (HTML) and the canonical category path list (Python).
+3. All product validation and data generation tools downstream reference the same canonical category structure—no mismatches, no manual syncing.
+4. *Supports “blank” keys for catch-all nodes, aligning with how your menu and validator expect category URLs.*
+
+**Key Features:**
+- Tree-based editor allows hierarchical editing of both keys (URL-safe, internal) and display aliases.
+- Optionally supports “blank” keys for all-encompassing menu items.
+- Prevents duplicate keys at the same menu level, enforcing consistency.
+- Direct export of HTML and Python for seamless static site and tooling integration.
+- “Human-in-the-loop” design keeps you in control, but ensures everything stays in sync.
+
+**Related scripts/tools:**
+- `extract_category_paths.py`: parses your nav HTML and generates valid_category_paths.py
+- `validate_filenames.py`: validates product images/filenames against canonical paths
+- Your product data generator scripts (Shopify/JS/CSV, etc.)
+
+**Typical workflow:**
+- Update categories/aliases in this editor → Export → (optionally) run validator or data generator → Deploy!
+
+"""
+
 import tkinter as tk
 from tkinter import ttk, simpledialog, messagebox
 import os

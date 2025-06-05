@@ -24,6 +24,7 @@ TOOLS = {
     "Product Data Generator": "main.py",
     "Product Data Upload to Host Server": "upload_products_js.py",
     "Backfill Variant Ids": "backfill_variant_ids.py",
+    "Filename Path Builder": "filename_path_builder.py"
 }
 
 SPLASH_TEXT = """
@@ -31,9 +32,10 @@ SPLASH_TEXT = """
 
 Welcome! This toolkit streamlines your human-in-the-loop product workflow for Shopify and your static site.
 
-Typical Usage Sequence:
+Typical Usage Sequence: 1.Create Image Filenames with the Filename path builder. Copy and rename images. This picker 
+will stay in sync with the valid category paths file.
 
-1. Validate Image Filenames
+2. Validate Image Filenames
    - Drop your new product images here to check filename format, category, and subcategory correctness.
    - Only images with valid names/categories should proceed.
    - Format should be category_subcategory1_subcategory2_name-of-product_PRICE-DOUBLE_optional-extra-notes
@@ -95,7 +97,6 @@ def main():
 
     # Hide window, schedule splash, then show main
     def show_and_hide():
-
         show_splash(root)
         root.deiconify()
 
@@ -106,7 +107,6 @@ def main():
         tk.Button(root, text=tool, width=30, command=lambda s=script: launch_script(s)).pack(pady=4)
 
     root.mainloop()
-
 
 
 if __name__ == "__main__":
